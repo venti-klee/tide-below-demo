@@ -3,13 +3,18 @@ const $$ = (s, el=document) => [...el.querySelectorAll(s)];
 const app = $('#app');
 
 const state = {
-  version: 3, act: 0, phase: 0, muted: false, truthful: null, trust: 0,
+  version: 5, runSeed:Date.now()%2147483647, act: 0, phase: 0, muted: false, truthful: null, trust: 0,
   gauges: new Set(), doorStep: 0, beats: [],
   words: {}, selectedWord: null, facility: null,
   route: 0, flood: 18, syncHits: 0, syncMisses: 0,
   pipe:[90,90,0,270,90,0,90], pipeVersion:2, day:1, materials:1, support:0, lexicon:0,
-  roomClues:[], inventory:[], selectedItem:null, traceStep:0
+  roomClues:[], inventory:[], selectedItem:null, traceStep:0,
+  mapAlign:{x:18,y:76,r:-12}, cabinetCode:[0,0,0], gaugeTune:[8,88,54],
+  jigsawOrder:null, memoryDeck:null
 };
+
+function seededRandom(salt=0){let x=(state.runSeed+salt)|0;return()=>{x=Math.imul(x^x>>>15,1|x);x^=x+Math.imul(x^x>>>7,61|x);return((x^x>>>14)>>>0)/4294967296}}
+function shuffled(list,salt=0){const a=[...list],r=seededRandom(salt);for(let i=a.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
 
 const copy = {
   1:{title:'水位正常',objective:'环顾岗房，利用现场物品确认五条相互关联的线索。'},
@@ -60,6 +65,15 @@ function shell(act,stage,story,extra=''){
   $('#restart').onclick=()=>{if(confirm('重新开始这段值守？'))reset()};
 }
 
+function roomShell(stage,story){
+  app.innerHTML=`<section class="screen game room-game">${header(1)}<div class="room-full">${stage}
+    <aside class="room-journal"><div class="eyebrow">夜班调查簿</div><div class="room-progress"><span>证据链</span><b id="clueCount">0 / 5</b></div><div class="inventory" id="inventory"></div><div class="room-actions" id="actions"></div></aside>
+    <div class="room-subtitle story-box"><div class="speaker">${story.speaker}</div><div class="dialogue">${story.text}</div></div>
+  </div></section>`;
+  $('#sound').onclick=()=>{state.muted=!state.muted;$('#sound').textContent=state.muted?'×':'♪'};
+  $('#restart').onclick=()=>{if(confirm('重新开始这段值守？'))reset()};
+}
+
 function cover(){
   state.act=0;
   app.innerHTML=`<section class="screen cover"><div class="cover-art"></div><div class="cover-inner">
@@ -71,7 +85,7 @@ function cover(){
     <div class="cover-note"><b>本次试玩</b><p>四幕各截取一个关键交互，并用同一套“观察—记录—沟通—协同”循环连接。选择不会堵死主线，但会改变最后的损失与记录。</p></div>
   </div></section>`;
   $('#start').onclick=()=>{tone(180,.2,'triangle');act1()};
-  const saved=localStorage.getItem('tide-demo');let parsed=null;try{parsed=JSON.parse(saved)}catch(e){}$('#continue').disabled=!parsed||parsed.version!==3;
+  const saved=localStorage.getItem('tide-demo');let parsed=null;try{parsed=JSON.parse(saved)}catch(e){}$('#continue').disabled=!parsed||parsed.version!==5;
   $('#continue').onclick=()=>{const s=parsed;Object.assign(state,s);state.gauges=new Set(s.gauges||[]);renderAct(Math.max(1,state.act))};
 }
 function renderAct(n){({1:act1,2:act2,3:act3,4:act4,5:ending}[n]||cover)()}
@@ -83,8 +97,7 @@ function act1(){
   const stage=`<div class="pano-viewport" id="pano" tabindex="0"><div class="pano-world" id="panoWorld">
     <div class="pano-light"></div>${hotspot('gauges','三路水表',11,37)}${hotspot('desk','值守桌',87,62)}${hotspot('map','歪斜水路图',93,40)}${hotspot('cabinet','墙后空响',96,58)}${hotspot('door','石门观察孔',44,48)}${hotspot('bowl','缺口酒碗',63,61)}${hotspot('drain','沉积格栅',25,68)}
   </div><div class="pano-reticle">＋</div><div class="pano-help">按住拖动环顾 · 滚轮／方向键转向</div><div class="pano-compass"><i id="compassNeedle"></i><span>岗房 180°</span></div></div><div id="roomModal"></div>`;
-  const inv=`<div class="room-progress"><span>已确认线索</span><b id="clueCount">${state.roomClues.filter(x=>['desk','gauges','map','cabinet','door'].includes(x)).length} / 5</b></div><div class="inventory" id="inventory"></div>`;
-  shell(1,stage,{speaker:'梁顺 · 夜班',text:'这次不从谜题面板开始。先环顾整间岗房，决定什么值得靠近、什么应该带在身上。'},inv);
+  roomShell(stage,{speaker:'梁顺 · 夜班',text:'先看房间。水声、工具和旧纸，比规章更诚实。'});
   renderInventory();bindPanorama();
   $$('[data-hotspot]').forEach(h=>h.onclick=e=>{e.stopPropagation();openRoomInspect(h.dataset.hotspot)});
   checkRoomComplete();
@@ -115,19 +128,27 @@ function renderInventory(){
 function closeRoomModal(){const m=$('#roomModal');if(m)m.innerHTML=''}
 function roomModal(title,body,actions=''){const m=$('#roomModal');m.innerHTML=`<div class="inspect-shade"><section class="inspect-modal"><button class="inspect-close" id="inspectClose">×</button><div class="eyebrow">场景近景 / ${title}</div>${body}<div class="action-row">${actions}</div></section></div>`;$('#inspectClose').onclick=closeRoomModal}
 function openRoomInspect(id){
-  if(id==='desk')roomModal('值守桌',`<div class="inspect-layout"><div class="prop-crop notebook"></div><div><h3>五月十九值守簿</h3><p>往年这一页的三路读数整齐得不自然。桌角还放着听潮筒、灯油和检样钩。</p></div></div>`,`<button class="btn primary" id="collectDesk">整理腰包</button>`),$('#collectDesk').onclick=()=>{['horn','oil','hook'].forEach(addItem);addClue('desk');renderInventory();closeRoomModal();act1()};
+  if(id==='desk'){
+    const items=[['horn','听潮筒','0% 0%'],['oil','灯油','50% 0%'],['hook','检样钩','0% 100%']];
+    roomModal('值守桌',`<div class="desk-search"><div class="desk-log"><b>五月十九</b><span>历年三路读数完全相同——像是抄写，不像测量。</span></div>${items.map(x=>`<button class="desk-object ${state.inventory.includes(x[0])?'taken':''}" data-deskitem="${x[0]}"><i style="background-position:${x[2]}"></i><span>${state.inventory.includes(x[0])?'已收起':x[1]}</span></button>`).join('')}</div><div class="micro-hint">逐件检查桌面；拿走的工具会留在腰包。</div>`);
+    $$('[data-deskitem]').forEach(b=>b.onclick=()=>{if(b.classList.contains('taken'))return;addItem(b.dataset.deskitem);b.classList.add('taken');b.querySelector('span').textContent='已收起';tone(350,.1);renderInventory();if(items.every(x=>state.inventory.includes(x[0]))){addClue('desk');notify('桌面搜索完成');setTimeout(()=>{closeRoomModal();act1()},450)}});
+  }
   if(id==='gauges'){
     if(!state.inventory.includes('oil')){roomModal('三路水表','<p class="inspect-message">玻璃蒙着矿灰，灯光太暗。值守桌上应该有能清洁、补光的东西。</p>');return}
-    const data=[['主门',4.1,-18],['侧渠',7.8,46],['街井',4.0,-20]];roomModal('三路水表',`<p class="inspect-message">移动灯光，逐一点击表盘读数。</p><div class="mini-gauges">${data.map((g,i)=>`<button class="mini-gauge ${state.gauges.has(i)?'read':''}" data-read="${i}" style="--rot:${g[2]}deg"><i></i><span>${g[0]}<b>${state.gauges.has(i)?g[1]:'—'}</b></span></button>`).join('')}</div><div id="stampArea"></div>`);
-    $$('[data-read]').forEach(b=>b.onclick=()=>{const i=+b.dataset.read;state.gauges.add(i);b.classList.add('read');b.querySelector('b').textContent=data[i][1];tone(180+i*50,.1);if(state.gauges.size===3){$('#stampArea').innerHTML='<p class="blue">主门与街井持平，侧渠压力却高了一倍。</p><button class="stamp" data-record="normal">水位平稳</button> <button class="stamp truth" data-record="truth">总压异常</button>';$$('[data-record]').forEach(s=>s.onclick=()=>{state.truthful=s.dataset.record==='truth';if(state.truthful)state.trust++;addClue('gauges');save();closeRoomModal();act1()})}save()});
+    const data=[['主门',4.1,-18,28],['侧渠',7.8,46,72],['街井',4.0,-20,31]];
+    roomModal('三路水表',`<div class="micro-hint">拖动每盏检修灯，消除玻璃反光；蓝线出现时才能可靠读数。</div><div class="calibration-rack">${data.map((g,i)=>`<div class="calibration-unit ${state.gauges.has(i)?'ready':''}" data-unit="${i}"><div class="mini-gauge" style="--rot:${g[2]}deg"><i></i><span>${g[0]}<b>${state.gauges.has(i)?g[1]:'—'}</b></span><em style="--beam:${state.gaugeTune[i]}%"></em></div><input type="range" min="0" max="100" value="${state.gaugeTune[i]}" data-tune="${i}" aria-label="调整${g[0]}检修灯"></div>`).join('')}</div><div id="stampArea"></div>`);
+    const finishGauge=()=>{if(state.gauges.size===3){$('#stampArea').innerHTML='<div class="gauge-note">抄录整数：<b>4 · 8 · 4</b><small>主门与街井持平；侧渠压力翻倍。</small></div><button class="stamp" data-record="normal">盖“平稳”</button> <button class="stamp truth" data-record="truth">盖“异常”</button>';$$('[data-record]').forEach(s=>s.onclick=()=>{state.truthful=s.dataset.record==='truth';if(state.truthful)state.trust++;addClue('gauges');save();closeRoomModal();act1()})}};
+    $$('[data-tune]').forEach(sl=>sl.oninput=()=>{const i=+sl.dataset.tune;state.gaugeTune[i]=+sl.value;const unit=$(`[data-unit="${i}"]`),beam=$('em',unit);beam.style.setProperty('--beam',sl.value+'%');if(Math.abs(+sl.value-data[i][3])<=3&&!state.gauges.has(i)){state.gauges.add(i);unit.classList.add('ready');$('b',unit).textContent=data[i][1];tone(230+i*65,.18);notify(`${data[i][0]}读数已锁定`);finishGauge()}save()});finishGauge();
   }
   if(id==='map'){
     if(!state.roomClues.includes('gauges')){roomModal('歪斜水路图','<p class="inspect-message">图上有三条褪色管线，但你还不知道该追哪一条。先取得真实读数。</p>');return}
-    roomModal('歪斜水路图','<div class="inspect-layout"><div class="prop-crop blueprint"></div><div><h3>官方图删去了一段旧渠</h3><p>侧渠的红线在纸边突然中断，墙后却传来空响。</p></div></div>','<button class="btn primary" id="markMap">在墙上标记空腔</button>');$('#markMap').onclick=()=>{addClue('map');closeRoomModal();act1()};
+    const a=state.mapAlign;roomModal('双图叠合',`<div class="map-align"><div class="map-base"><i class="landmark l1"></i><i class="landmark l2"></i><i class="landmark l3"></i></div><div class="map-overlay" id="mapOverlay" style="--mx:${a.x}px;--my:${a.y}px;--mr:${a.r}deg"><i class="landmark l1"></i><i class="landmark l2"></i><i class="landmark l3"></i></div></div><div class="align-controls"><label>横移<input type="range" min="-90" max="90" value="${a.x}" data-align="x"></label><label>纵移<input type="range" min="-90" max="90" value="${a.y}" data-align="y"></label><label>旋转<input type="range" min="-15" max="15" value="${a.r}" data-align="r"></label></div><div class="micro-hint" id="alignHint">让钟楼、粮仓和旧井三个圆点完全重合。</div><div id="alignDone"></div>`);
+    $$('[data-align]').forEach(sl=>sl.oninput=()=>{state.mapAlign[sl.dataset.align]=+sl.value;const o=$('#mapOverlay');o.style.setProperty('--m'+sl.dataset.align,state.mapAlign[sl.dataset.align]+(sl.dataset.align==='r'?'deg':'px'));const ok=Math.abs(state.mapAlign.x)<5&&Math.abs(state.mapAlign.y)<5&&Math.abs(state.mapAlign.r)<2;$('#alignHint').textContent=ok?'三处地标吻合；旧渠红线延伸到墙后。':'让钟楼、粮仓和旧井三个圆点完全重合。';$('#alignDone').innerHTML=ok?'<button class="btn primary" id="lockMap">固定叠图</button>':'';if(ok)$('#lockMap').onclick=()=>{addClue('map');tone(480,.2);closeRoomModal();act1()};save()});
   }
   if(id==='cabinet'){
     if(!state.roomClues.includes('map')){roomModal('墙后空响','<p class="inspect-message">石墙听起来是空的，但现行水路图挡住了接缝。</p>');return}
-    roomModal('隐藏铁柜','<div class="inspect-layout"><div class="prop-crop notebook"></div><div><h3>封门预案</h3><p>“听见人声不得回应。”如果门后真的只有死渠，为什么会有这一条？</p></div></div>','<button class="btn primary" id="takeNote">收起赵川册页</button>');$('#takeNote').onclick=()=>{addItem('notebook');addClue('cabinet');closeRoomModal();act1()};
+    roomModal('隐藏铁柜',`<div class="code-clue">值守簿边缘刻着：<b>“三表取整，依次开柜。”</b></div><div class="cabinet-lock">${state.cabinetCode.map((n,i)=>`<button data-dial="${i}"><span>▲</span><b>${n}</b><span>▼</span></button>`).join('')}</div><div class="micro-hint">回想刚刚抄录的主门、侧渠、街井读数。</div><div id="cabinetResult"></div>`);
+    $$('[data-dial]').forEach(d=>d.onclick=e=>{const i=+d.dataset.dial;state.cabinetCode[i]=(state.cabinetCode[i]+1)%10;$('b',d).textContent=state.cabinetCode[i];tone(145+i*25,.06);if(state.cabinetCode.join('')==='484'){$('#cabinetResult').innerHTML='<div class="cabinet-open"><div class="prop-crop notebook"></div><span>铁柜弹开：封门预案与赵川册页</span><button class="btn primary" id="takeNote">收起册页</button></div>';$('#takeNote').onclick=()=>{addItem('notebook');addClue('cabinet');closeRoomModal();act1()}}save()});
   }
   if(id==='door'){
     if(state.selectedItem!=='horn'){roomModal('石门观察孔',`<p class="inspect-message">石面后的声音太轻。请先在腰包中选择<strong>听潮筒</strong>，再调查这里。</p>`);return}
@@ -198,11 +219,12 @@ function doorTools(){
 }
 
 function jigsaw(){
-  const fragments=['封面：门与三道水纹','左三、右二……','梁顺，不要再……','旧渠延伸向上'];let selected=null,placed=0;
-  const stage=`<div class="lex-stage" style="position:absolute;inset:0"></div><div class="jigsaw"><div><div class="prop-display"></div><div class="eyebrow" style="margin-top:10px">关键物品 · 赵川的湿册</div></div><div><div class="piece-bank">${fragments.map((x,i)=>`<button class="paper-piece" data-piece="${i}">${x}</button>`).join('')}</div><div class="piece-slots" style="margin-top:18px">${fragments.map((x,i)=>`<button class="paper-slot" data-slot="${i}">第 ${i+1} 块纤维</button>`).join('')}</div></div></div>`;
-  shell(2,stage,{speaker:'梁顺 · 桌面近景',text:'四块湿页的纸纤维、墨线和缝孔各不相同。选中碎页，再放进对应位置；错放不会损坏原件。'},'<div class="scene-progress"><i class="on"></i><i class="on"></i><i class="on"></i></div>');
-  $$('[data-piece]').forEach(p=>p.onclick=()=>{selected=+p.dataset.piece;$$('[data-piece]').forEach(x=>x.classList.toggle('selected',x===p));tone(280,.06)});
-  $$('[data-slot]').forEach(s=>s.onclick=()=>{if(selected===null){notify('先选一块湿页');return}if(+s.dataset.slot!==selected){notify('纤维方向接不上，再对照缝线');tone(90,.1,'square');return}s.textContent=fragments[selected];s.classList.add('filled');$(`[data-piece="${selected}"]`).style.visibility='hidden';selected=null;placed++;tone(420,.13);if(placed===4){dialogue('赵川册页 · 拼合完成','赵川没有死在门前。他去过另一边，还画下了被官方水路图删掉的上行旧渠。');$('#actions').innerHTML='<button class="btn primary" id="next">解除主门卡榫</button>';$('#next').onclick=gateCG}});
+  const fragments=['封面：门与三道水纹','……左三，右二……','……梁顺，不要再听……','旧渠并未终止，仍向上延伸'];
+  state.jigsawOrder ||= shuffled([0,1,2,3],41);const rand=seededRandom(73),rot={};state.jigsawOrder.forEach((id,i)=>rot[id]=(1+Math.floor(rand()*3))*90);let selected=null,placed=0;
+  const stage=`<div class="lex-stage" style="position:absolute;inset:0"></div><div class="jigsaw"><div><div class="prop-display"></div><div class="eyebrow" style="margin-top:10px">关键物品 · 赵川的湿册</div><p class="micro-hint">单击选择；再次点击同一碎页可旋转。纸纤维与缝线必须同时吻合。</p></div><div><div class="piece-bank">${state.jigsawOrder.map(id=>`<button class="paper-piece" data-piece="${id}" style="--pr:${rot[id]}deg">${fragments[id]}</button>`).join('')}</div><div class="piece-slots" style="margin-top:18px">${fragments.map((x,i)=>`<button class="paper-slot edge-${i}" data-slot="${i}">湿页轮廓 ${['◇','╱','≋','⌁'][i]}</button>`).join('')}</div></div></div>`;
+  shell(2,stage,{speaker:'梁顺 · 桌面近景',text:'水流把页序和朝向都冲乱了。先看墨线，再看缝孔。'},'<div class="scene-progress"><i class="on"></i><i class="on"></i><i class="on"></i></div>');
+  $$('[data-piece]').forEach(p=>p.onclick=()=>{const id=+p.dataset.piece;if(selected===id){rot[id]=(rot[id]+90)%360;p.style.setProperty('--pr',rot[id]+'deg');tone(210,.06);return}selected=id;$$('[data-piece]').forEach(x=>x.classList.toggle('selected',x===p));tone(280,.06)});
+  $$('[data-slot]').forEach(s=>s.onclick=()=>{if(selected===null){notify('先选一块湿页');return}if(+s.dataset.slot!==selected){notify('墨线无法续上');tone(90,.1,'square');return}if(rot[selected]!==0){notify('缝孔方向反了，再旋转碎页');tone(110,.1,'square');return}s.textContent=fragments[selected];s.classList.add('filled');$(`[data-piece="${selected}"]`).style.visibility='hidden';selected=null;placed++;tone(420,.13);notify(`册页恢复 ${placed} / 4`);if(placed===4){dialogue('赵川册页 · 拼合完成','赵川没有死在门前。他去过另一边，还画下了被官方水路图删掉的上行旧渠。');$('#actions').innerHTML='<button class="btn primary" id="next">解除主门卡榫</button>';$('#next').onclick=gateCG}});
 }
 
 function gateCG(){
@@ -228,15 +250,19 @@ function dayHub(){
 }
 
 function memoryGame(){
-  const vals=['◈','◉','⌁','≋','◈','◉','⌁','≋'];let open=[],matched=0,busy=false;
-  const stage=`<div class="lex-stage" style="position:absolute;inset:0"></div><div class="memory-grid">${vals.map((v,i)=>`<button class="memory-card" data-card="${i}" data-val="${v}">${v}</button>`).join('')}</div>`;
-  const pos=portraitPos('focused').split(' ');shell(3,stage,{speaker:'小满 · 清淤检样',text:'她把矿渣按纹理排成对。翻开两块样本，找出相同沉积物；配对完成的样本会进入废料槽。'},`<div class="portrait-wrap"><div class="portrait" style="--px:${pos[0]};--py:${pos[1]}"></div><div class="portrait-copy"><b>动作差分 · 俯身检样</b><small>配错时她会自己把样本翻回去；不会等待玩家替她完成所有工作。</small></div></div>`);
-  $$('[data-card]').forEach(c=>c.onclick=()=>{if(busy||c.classList.contains('done')||c.classList.contains('open'))return;c.classList.add('open');open.push(c);tone(260,.06);if(open.length===2){busy=true;setTimeout(()=>{if(open[0].dataset.val===open[1].dataset.val){open.forEach(x=>x.classList.add('done'));matched++;tone(430,.13);notify(`沉渣配对 ${matched} / 4`)}else{open.forEach(x=>x.classList.remove('open'));tone(100,.1,'square')}open=[];busy=false;if(matched===4){state.materials+=2;state.day=2;save();dialogue('小满 · 放松','最后一对蓝矿渣落进槽里。她把梁顺刚教的“清、浑、一样”念了一遍，发音很怪。');$('#actions').innerHTML='<button class="btn primary" id="next">进入第二钟日</button>';$('#next').onclick=dayHub}},450)}});
+  const glyphs=['◈','◉','⌁','≋','△','⬡'];state.memoryDeck ||= shuffled([...glyphs,...glyphs],101);
+  let open=[],matched=0,busy=true,moves=0,combo=0,previewUsed=false;
+  const stage=`<div class="lex-stage" style="position:absolute;inset:0"></div><div class="memory-hud"><span>步数 <b id="memoryMoves">0</b></span><span>连续配对 <b id="memoryCombo">0</b></span><span>完成 <b id="memoryPairs">0 / 6</b></span><button class="btn small" id="previewCards">蓝灯闪照 ×1</button></div><div class="memory-grid expanded">${state.memoryDeck.map((v,i)=>`<button class="memory-card peek" data-card="${i}" data-val="${v}">${v}</button>`).join('')}</div>`;
+  const pos=portraitPos('focused').split(' ');shell(3,stage,{speaker:'小满 · 清淤检样',text:'十二块矿渣被水流重新打乱。记住纹理，再把同类送入一个槽。'},`<div class="portrait-wrap"><div class="portrait" style="--px:${pos[0]};--py:${pos[1]}"></div><div class="portrait-copy"><b>小满 · 俯身检样</b><small>牌序由本轮随机种子决定。更少步数会留下更多可用工料。</small></div></div>`);
+  const cards=()=>$$('[data-card]'),update=()=>{$('#memoryMoves').textContent=moves;$('#memoryCombo').textContent=combo;$('#memoryPairs').textContent=`${matched} / 6`};
+  setTimeout(()=>{cards().forEach(c=>c.classList.remove('peek'));busy=false;notify('检样开始：牌面已经翻回')},1100);
+  $('#previewCards').onclick=()=>{if(previewUsed||busy||open.length)return;previewUsed=true;busy=true;$('#previewCards').disabled=true;cards().filter(c=>!c.classList.contains('done')).forEach(c=>c.classList.add('peek'));tone(520,.2);setTimeout(()=>{cards().forEach(c=>c.classList.remove('peek'));busy=false},700)};
+  cards().forEach(c=>c.onclick=()=>{if(busy||c.classList.contains('done')||c.classList.contains('open'))return;c.classList.add('open');open.push(c);tone(260,.06);if(open.length===2){busy=true;moves++;setTimeout(()=>{if(open[0].dataset.val===open[1].dataset.val){open.forEach(x=>x.classList.add('done'));matched++;combo++;tone(430+combo*25,.13);notify(combo>1?`连续配对 ×${combo}`:`配对完成 ${matched} / 6`)}else{open.forEach(x=>x.classList.remove('open'));combo=0;tone(100,.1,'square')}open=[];busy=false;update();if(matched===6){const reward=moves<=8?3:moves<=11?2:1;state.materials+=reward;state.day=2;save();dialogue('小满 · 放松',`全部归槽。你用了 ${moves} 步，保住 ${reward} 份工料。她把“清、浑、一样”念了一遍，发音很怪。`);$('#actions').innerHTML='<button class="btn primary" id="next">进入第二钟日</button>';$('#next').onclick=dayHub}},520)}});
 }
 
 function languageBoard(){
   state.act=3;save();
-  const tokens=[['sui','𐌀𐌔','水'],['gar','𐌋𐌙','危险'],['hem','𐌏𐌏','一起']];
+  const tokens=shuffled([['sui','𐌀𐌔','水'],['gar','𐌋𐌙','危险'],['hem','𐌏𐌏','一起']],207),meanings=shuffled(['水','危险','一起'],223);let mistakes=0;
   const stage=`<div class="lex-stage" style="position:absolute;inset:0"></div><div class="lex-board">
     <div class="contexts"><div class="eyebrow">两次语境，才算一个词</div>
       <div class="context-card"><b>语境 01 · 裂碗</b><p>少女指着从碗缝流出的液体，反复说出同一音节。</p><div class="vine-word"><i></i><i></i><i></i></div></div>
@@ -244,7 +270,7 @@ function languageBoard(){
       <div class="word-bank">${tokens.map(t=>`<button class="word-token ${state.selectedWord===t[0]?'selected':''}" data-word="${t[0]}">${t[1]} · ${t[0]}</button>`).join('')}</div>
     </div>
     <div class="meanings"><div class="eyebrow">共桌词板 / 待确认</div>
-      ${['水','危险','一起'].map((m,i)=>{const val=Object.entries(state.words).find(([,v])=>v===m)?.[0];return `<button class="meaning-slot ${val?'filled correct':''}" data-meaning="${m}"><strong>${m}</strong><span>${val?tokens.find(t=>t[0]===val)[1]+' · 蓝线结':'点击放入词块'}</span></button>`}).join('')}
+      ${meanings.map((m,i)=>{const val=Object.entries(state.words).find(([,v])=>v===m)?.[0];return `<button class="meaning-slot ${val?'filled correct':''}" data-meaning="${m}"><strong>${m}</strong><span>${val?tokens.find(t=>t[0]===val)[1]+' · 蓝线结':'点击放入词块'}</span></button>`}).join('')}
       <div class="context-card" style="margin-top:auto"><b>少女的警告</b><p id="sentence">上面 · <span class="blue">未知</span> · 水 · <span class="blue">未知</span>。三个机关 · <span class="blue">未知</span>。</p></div>
       <div class="lex-status"><span>共享词典</span><span id="wordCount">${Object.keys(state.words).length} / 3 已确认</span></div>
     </div>
@@ -258,7 +284,7 @@ function languageBoard(){
   $$('.word-token').forEach(el=>el.onclick=()=>{state.selectedWord=el.dataset.word;$$('.word-token').forEach(x=>x.classList.toggle('selected',x===el));tone(300,.08)});
   $$('.meaning-slot').forEach(el=>el.onclick=()=>{
     if(!state.selectedWord){notify('先选一个藤字词块');return}
-    const token=tokens.find(t=>t[0]===state.selectedWord);if(token[2]!==el.dataset.meaning){notify('这个解释与第二个语境冲突');tone(100,.15,'square');return}
+    const token=tokens.find(t=>t[0]===state.selectedWord);if(token[2]!==el.dataset.meaning){mistakes++;notify(mistakes<3?'这个解释与第二个语境冲突':'小满重新演示了动作；注意词出现时她指向什么');el.classList.add('conflict');setTimeout(()=>el.classList.remove('conflict'),500);tone(100,.15,'square');return}
     state.words[state.selectedWord]=el.dataset.meaning;el.classList.add('filled','correct');el.querySelector('span').textContent=token[1]+' · 蓝线结';notify(`已确认：${token[1]} = ${token[2]}`);state.selectedWord=null;$$('.word-token').forEach(x=>x.classList.remove('selected'));refreshLex();save();
   });
   if(Object.keys(state.words).length===3){$('#actions').innerHTML='<button class="btn primary" id="next">进入第三钟日</button>';$('#next').onclick=()=>{state.day=3;save();dayHub()}}
@@ -323,16 +349,16 @@ function routeThree(){
 }
 function syncGame(){
   state.route=3;save();
-  const labels=['三下 · 准备并拉紧','两下 · 共同承重','一下 · 同时落杆'];
-  $('.route-map').outerHTML=`<div class="sync-panel"><div class="sync-ring"><i class="sync-target" style="--target:0deg"></i><i class="sync-hand" style="--angle:0deg"></i><button class="sync-button" id="strike">落 杆</button><div class="sync-count" id="syncLabel">${labels[state.syncHits]}</div></div></div>`;
-  let angle=0,target=0;
+  const labels=['三下 · 准备并拉紧','两下 · 共同承重','一下 · 同时落杆'],rng=seededRandom(307);
+  let angle=Math.floor(rng()*360),target=Math.floor(rng()*360),speed=3.1+state.flood/42+rng()*1.4;
+  $('.route-map').outerHTML=`<div class="sync-panel"><div class="sync-ring"><i class="sync-target" style="--target:${target}deg"></i><i class="sync-hand" style="--angle:${angle}deg"></i><button class="sync-button" id="strike">落 杆</button><div class="sync-count" id="syncLabel">${labels[state.syncHits]} · 转速 ${speed.toFixed(1)}</div></div></div>`;
   const hand=$('.sync-hand'),targetEl=$('.sync-target');
-  const timer=setInterval(()=>{angle=(angle+4)%360;hand.style.setProperty('--angle',angle+'deg')},35);
+  const timer=setInterval(()=>{angle=(angle+speed)%360;hand.style.setProperty('--angle',angle+'deg')},35);
   $('#strike').onclick=()=>{
     const d=Math.min(Math.abs(angle-target),360-Math.abs(angle-target));
-    if(d<34){state.syncHits++;tone(260+state.syncHits*100,.28,'triangle',.06);notify(labels[state.syncHits-1]+'：完成');target=(target+118)%360;targetEl.style.setProperty('--target',target+'deg');
-      if(state.syncHits>=3){clearInterval(timer);state.flood=Math.max(6,state.flood-45);state.act=5;save();setTimeout(ending,700)}else $('#syncLabel').textContent=labels[state.syncHits];
-    }else{state.syncMisses++;setFlood(5);notify('没有同拍——等琥珀信号转到正上方');tone(78,.18,'square')}
+    if(d<30){state.syncHits++;tone(260+state.syncHits*100,.28,'triangle',.06);notify(labels[state.syncHits-1]+'：完成');target=(target+80+Math.floor(rng()*170))%360;speed+=.55;targetEl.style.setProperty('--target',target+'deg');
+      if(state.syncHits>=3){clearInterval(timer);state.flood=Math.max(6,state.flood-45);state.act=5;save();setTimeout(ending,700)}else $('#syncLabel').textContent=`${labels[state.syncHits]} · 转速 ${speed.toFixed(1)}`;
+    }else{state.syncMisses++;setFlood(5);notify('没有同拍——等指针进入琥珀信号区');tone(78,.18,'square')}
   };
 }
 
